@@ -24,7 +24,7 @@ import os
 import re
 from filelock import FileLock
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import requests
 
@@ -132,6 +132,11 @@ def notify_admin(text):
 # ===== Endpoints =====
 @app.route("/", methods=["GET"])
 def index():
+    return send_from_directory(HERE, "index.html")
+
+
+@app.route("/api", methods=["GET"])
+def api_info():
     return jsonify({
         "name": "TelegramBot Booking API",
         "endpoints": {
