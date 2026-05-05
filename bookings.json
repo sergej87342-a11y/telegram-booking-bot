@@ -1,1 +1,32 @@
-[]
+[
+  {
+    "client_name": "Аня",
+    "service": "маникюр",
+    "date": "01.05.2026",
+    "time": "13:00",
+    "phone": "+972501234567",
+    "client_chat_id": null,
+    "client_reminder_sent": false,
+    "source": "web"
+  },
+  {
+    "client_name": "sergej",
+    "service": "маникюр",
+    "date": "01.05.2026",
+    "time": "11:30",
+    "phone": "0529115487",
+    "client_chat_id": null,
+    "client_reminder_sent": false,
+    "source": "web"
+  },
+  {
+    "client_name": "sergej",
+    "service": "парикмахер",
+    "date": "01.05.2026",
+    "time": "15:00",
+    "phone": "0529115487",
+    "client_chat_id": null,
+    "client_reminder_sent": false,
+    "source": "web"
+  }
+]

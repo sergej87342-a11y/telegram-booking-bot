@@ -1,1 +1,5 @@
 pyTelegramBotAPI>=4.14
+flask>=3.0
+flask-cors>=4.0
+requests>=2.31
+filelock>=3.12

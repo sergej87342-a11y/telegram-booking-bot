@@ -3,18 +3,18 @@
     "date": "01.05.2026",
     "time": "11:30",
     "service": "маникюр",
-    "status": "free"
+    "status": "booked"
   },
   {
     "date": "01.05.2026",
     "time": "13:00",
     "service": "маникюр",
-    "status": "free"
+    "status": "booked"
   },
   {
     "date": "01.05.2026",
     "time": "15:00",
     "service": "парикмахер",
-    "status": "free"
+    "status": "booked"
   }
 ]

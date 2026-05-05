@@ -4,7 +4,10 @@
 
 import json
 import os
+import re
 import sys
+import traceback
+from filelock import FileLock
 import threading
 import time
 import telebot
@@ -15,6 +18,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 BOOKINGS_PATH = os.path.join(HERE, "bookings.json")
 SLOTS_PATH = os.path.join(HERE, "slots.json")
+_BOOKINGS_LOCK = FileLock(BOOKINGS_PATH + ".lock")
+_SLOTS_LOCK = FileLock(SLOTS_PATH + ".lock")
 WELCOME_VOICE_PATH = os.path.join(HERE, "welcome.ogg")  # необязательный голосовой attachment
 
 # ===== Список услуг (для выбора при записи) =====
@@ -52,7 +57,7 @@ ADMIN_BUTTONS = {
     ADMIN_BTN_ADD_SLOT, ADMIN_BTN_BOOK_MANUAL, ADMIN_BTN_FREE_SLOT,
     ADMIN_BTN_DEL_SLOT, ADMIN_BTN_DEL_BOOKING,
 }
-USER_BUTTONS = {"Услуги", "Цены", "Адрес", "Записаться"}
+USER_BUTTONS = {"📅 Записаться", "💲 Цены", "📍 Адрес", "❌ Отменить запись"}
 
 
 # ===== Конфиг =====
@@ -98,10 +103,11 @@ def load_bookings():
 
 def save_bookings(items):
     """Атомарная запись списка записей в bookings.json."""
-    tmp = BOOKINGS_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, BOOKINGS_PATH)
+    with _BOOKINGS_LOCK:
+        tmp = BOOKINGS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, BOOKINGS_PATH)
 
 
 def ensure_bookings_file():
@@ -135,10 +141,11 @@ def load_slots():
 
 def save_slots(items):
     """Атомарная запись списка слотов в slots.json."""
-    tmp = SLOTS_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, SLOTS_PATH)
+    with _SLOTS_LOCK:
+        tmp = SLOTS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, SLOTS_PATH)
 
 
 def ensure_slots_file():
@@ -225,8 +232,8 @@ def is_admin(chat_id):
 def main_keyboard(chat_id=None):
     """Главная клавиатура. Для владельца — плюс кнопка панели."""
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.row("Услуги", "Цены")
-    kb.row("Адрес", "Записаться")
+    kb.row("📅 Записаться", "💲 Цены")
+    kb.row("📍 Адрес", "❌ Отменить запись")
     if is_admin(chat_id):
         kb.row(ADMIN_PANEL_BTN)
     return kb
@@ -260,7 +267,6 @@ def slots_keyboard(free_slots):
         kb.row(f"{s.get('date', '')} {s.get('time', '')}".strip())
     return kb
 
-
 # ===== /start — приветствие =====
 # Текст голосового файла welcome.ogg (если он есть в папке):
 #   "Здравствуйте! Вы можете записаться через кнопки ниже."
@@ -286,24 +292,19 @@ def start_cmd(message):
 
 
 # ===== Информационные кнопки (тексты из config.json) =====
-@bot.message_handler(func=lambda m: m.text == "Услуги")
-def show_services(message):
-    bot.send_message(message.chat.id, CONFIG["services_text"], reply_markup=main_keyboard(message.chat.id))
-
-
-@bot.message_handler(func=lambda m: m.text == "Цены")
+@bot.message_handler(func=lambda m: m.text == "💲 Цены")
 def show_prices(message):
     bot.send_message(message.chat.id, CONFIG["prices_text"], reply_markup=main_keyboard(message.chat.id))
 
 
-@bot.message_handler(func=lambda m: m.text == "Адрес")
+@bot.message_handler(func=lambda m: m.text == "📍 Адрес")
 def show_address(message):
     bot.send_message(message.chat.id, CONFIG["address_text"], reply_markup=main_keyboard(message.chat.id))
 
 
 # ===== Кнопка "Записаться" — flow из 4 шагов =====
 # 1) услуга → 2) свободный слот → 3) имя → 4) телефон → запись + уведомления
-@bot.message_handler(func=lambda m: m.text == "Записаться")
+@bot.message_handler(func=lambda m: m.text == "📅 Записаться")
 def start_booking(message):
     user_data[message.chat.id] = {}
     bot.send_message(
@@ -312,6 +313,11 @@ def start_booking(message):
         reply_markup=services_keyboard(),
     )
     bot.register_next_step_handler(message, handle_service_choice)
+
+
+@bot.message_handler(func=lambda m: m.text == "❌ Отменить запись")
+def btn_cancel_booking(message):
+    cmd_cancelbooking(message)
 
 
 def handle_service_choice(message):
@@ -384,8 +390,8 @@ def handle_phone_finalize(message):
     """Шаг 4: получили телефон → сохраняем запись, бронируем слот, уведомляем."""
     chat_id = message.chat.id
     phone = (message.text or "").strip()
-    if not phone or phone.startswith("/"):
-        bot.send_message(chat_id, "Телефон пустой. Введите телефон ещё раз:")
+    if not _is_valid_phone(phone):
+        bot.send_message(chat_id, "Неверный формат телефона. Введите номер ещё раз (например: +972501234567):")
         bot.register_next_step_handler(message, handle_phone_finalize)
         return
 
@@ -463,6 +469,13 @@ def admin_back(message):
         "Главное меню:",
         reply_markup=main_keyboard(message.chat.id),
     )
+
+
+_PHONE_RE = re.compile(r"^[\d\s\+\-\(\)]{7,20}$")
+
+
+def _is_valid_phone(text):
+    return bool(_PHONE_RE.match(text or ""))
 
 
 def _is_cancel_text(text):
@@ -1123,13 +1136,23 @@ def admin_btn_del_booking(message):
         cmd_delbooking(message)
 
 
-# ===== Любое непонятное сообщение — показать меню =====
-@bot.message_handler(func=lambda m: True)
-def fallback(message):
+# ===== Голосовые сообщения =====
+@bot.message_handler(content_types=['voice'])
+def handle_voice(message):
     bot.send_message(
         message.chat.id,
-        "Выберите кнопку из меню:",
-        reply_markup=main_keyboard(message.chat.id),
+        "Пока я не понимаю голосовые сообщения. Напишите, пожалуйста, текстом 🙂",
+    )
+
+
+# ===== Любое непонятное текстовое сообщение — показываем меню =====
+@bot.message_handler(func=lambda m: True)
+def fallback(message):
+    chat_id = message.chat.id
+    bot.send_message(
+        chat_id,
+        "Воспользуйтесь кнопками ниже 👇",
+        reply_markup=main_keyboard(chat_id),
     )
 
 
@@ -1167,19 +1190,19 @@ def send_today_bookings_to_admin():
 
 
 def _daily_reminder_loop():
-    """Каждые 60 сек смотрит время. В DAILY_REMINDER_HOUR:DAILY_REMINDER_MINUTE
+    """Каждые 60 сек смотрит время. Начиная с DAILY_REMINDER_HOUR
     шлёт сегодняшний список (один раз в сутки)."""
     global _last_reminder_date
     while True:
         try:
             now = datetime.now()
-            if (now.hour == DAILY_REMINDER_HOUR
-                    and now.minute == DAILY_REMINDER_MINUTE
+            if (now.hour >= DAILY_REMINDER_HOUR
                     and _last_reminder_date != now.date()):
                 send_today_bookings_to_admin()
                 _last_reminder_date = now.date()
         except Exception as e:
             print(f"⚠ Ошибка в reminder loop: {e}")
+            traceback.print_exc()
         time.sleep(60)
 
 
@@ -1267,6 +1290,7 @@ def _client_reminder_loop():
             send_client_reminders()
         except Exception as e:
             print(f"⚠ Ошибка в client reminder loop: {e}")
+            traceback.print_exc()
         time.sleep(60)
 
 
@@ -1279,13 +1303,6 @@ if __name__ == "__main__":
     # Если мы здесь — bootstrap прошёл, BOT_TOKEN валиден
     print(f"TOKEN EXISTS: {bool(BOT_TOKEN)}", flush=True)
 
-    # Снять webhook, если он был установлен — иначе getUpdates ловит 409 Conflict.
-    # Также drop_pending_updates=True гасит хвост сообщений от старого инстанса.
-    try:
-        bot.remove_webhook()
-        print("WEBHOOK REMOVED", flush=True)
-    except Exception as e:
-        print(f"⚠ remove_webhook failed: {e}", flush=True)
 
     print(f"Напоминалка админу: ежедневно в {DAILY_REMINDER_HOUR:02d}:{DAILY_REMINDER_MINUTE:02d}", flush=True)
 
